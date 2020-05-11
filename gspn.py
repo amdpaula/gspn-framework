@@ -1,7 +1,23 @@
 import time
 import numpy as np
+# tira daqui o from . para funcionar o gspn_execution
 import gspn_analysis
 import sparse
+
+
+def find_correct_value(list1, list2, element1, element2):
+    '''
+    We know the elements we want to find on each list and we want to know their index
+    :param list1: list of int
+    :param list2: list of int
+    :param element1: element we want to find on list 1
+    :param element2: element we want to find on list 2
+    :return: index of the elements
+    '''
+    for i in list1:
+        if list1[i] == element1:
+            if list2[i] == element2:
+                return i
 
 
 # TODO: include arc firing with more than one token (for that change fire_transition and get_enabled_transitions)
@@ -18,8 +34,8 @@ class GSPN(object):
         self.__initial_marking = {}
         self.__initial_marking_sparse = {}
         self.__transitions = {}
-        self.__arc_in_m = sparse.COO([[],[]], [], shape=(0,0))
-        self.__arc_out_m = sparse.COO([[],[]], [], shape=(0,0))
+        self.__arc_in_m = sparse.COO([[], []], [], shape=(0, 0))
+        self.__arc_out_m = sparse.COO([[], []], [], shape=(0, 0))
         self.__ct_tree = None
         self.__ctmc = None
         self.__ctmc_steady_state = None
@@ -27,10 +43,26 @@ class GSPN(object):
         self.__nsamples = {}
         self.__sum_samples = {}
 
-        self.places_to_index= {}
+        # Mappings that translate x_to_y
+        self.places_to_index = {}
         self.transitions_to_index = {}
         self.index_to_places = {}
         self.index_to_transitions = {}
+
+    def get_arc_in_m(self):
+        return self.__arc_in_m.copy()
+
+    def get_arc_out_m(self):
+        return self.__arc_out_m
+
+    def get_places(self):
+        return self.__places
+
+    def get_number_of_tokens(self):
+        total = 0
+        for place in self.__places:
+            total = total + self.__places[place]
+        return total
 
     def add_places(self, name, ntokens=[], set_initial_marking=True):
         '''
@@ -139,7 +171,7 @@ class GSPN(object):
         len_coords_in = len(self.__arc_in_m.coords[0])
         len_coords_out = len(self.__arc_out_m.coords[0])
 
-        aux_in_list = [[],[]]
+        aux_in_list = [[], []]
         aux_in_list[0] = list(self.__arc_in_m.coords[0])
         aux_in_list[1] = list(self.__arc_in_m.coords[1])
         for place_in, list_transitions_in in arc_in.items():
@@ -148,7 +180,7 @@ class GSPN(object):
                 aux_in_list[1].append(self.transitions_to_index[transition_in])
                 len_coords_in += 1
 
-        aux_out_list = [[],[]]
+        aux_out_list = [[], []]
         aux_out_list[0] = list(self.__arc_out_m.coords[0])
         aux_out_list[1] = list(self.__arc_out_m.coords[1])
         for transition_out, list_places_out in arc_out.items():
@@ -158,15 +190,46 @@ class GSPN(object):
                 len_coords_out += 1
 
         #  Creation of Sparse Matrix
-        self.__arc_in_m = sparse.COO(aux_in_list, np.ones(len_coords_in), shape=(len(self.__places), len(self.__transitions)))
-        self.__arc_out_m = sparse.COO(aux_out_list, np.ones(len_coords_out), shape=(len(self.__transitions), len(self.__places)))
+        self.__arc_in_m = sparse.COO(aux_in_list, np.ones(len_coords_in),
+                                     shape=(len(self.__places), len(self.__transitions)))
+        self.__arc_out_m = sparse.COO(aux_out_list, np.ones(len_coords_out),
+                                      shape=(len(self.__transitions), len(self.__places)))
 
         return self.__arc_in_m, self.__arc_out_m
+
+    def add_arc_weight(self, type, elem1, elem2, weight):
+
+        if type == 'input':
+            place_index = self.places_to_index[elem1]
+            transition_index = self.transitions_to_index[elem2]
+            #Array positions of all input arcs that start in defined place
+            places_indices = set(np.where(self.__arc_in_m.coords[0] == place_index)[0])
+            #Array positions of all input arcs that end in defined transition
+            transition_indices = set(np.where(self.__arc_in_m.coords[1] == transition_index)[0])
+            arc_position = places_indices.intersection(transition_indices)
+            for arc in arc_position:
+                self.__arc_in_m.data[arc] = weight
+
+        elif type == 'output':
+            transition_index = self.transitions_to_index[elem1]
+            place_index = self.places_to_index[elem2]
+            #Array positions of all output arcs that start in defined transition
+            transition_indices = set(np.where(self.__arc_out_m.coords[0] == transition_index)[0])
+            #Array positions of all output arcs that end in defined place
+            places_indices = set(np.where(self.__arc_out_m.coords[1] == place_index)[0])
+            arc_position = places_indices.intersection(transition_indices)
+            for arc in arc_position:
+                self.__arc_out_m.data[arc] = weight
+
+        else:
+            raise Exception("Type incorrectly specified, can either be 'input' or 'output'")
+
+        return None
 
     def add_tokens(self, place_name, ntokens, set_initial_marking=False):
         '''
         Adds extra tokens to the places in the place_name list.
-        :param place_name: (list) with the input places names, to where the tokens should be added
+        :param place_name: (list) with the input places names, to where the tokensnp.one should be added
         :param ntokens: (list) with the number of tokens to be added (must have the same order as in the place_name list)
         :param set_initial_marking: (bool) if True the number of tokens added will also be added to the initial
                                     marking, if False the initial marking remains unchanged
@@ -258,32 +321,30 @@ class GSPN(object):
         return self.__arc_in_m.copy(), self.__arc_out_m.copy()
 
     # TODO: FIX THIS METHOD TO TAKE INTO ACCOUNT SPARSE MATRICES
+    # TODO: ALREADY TESTED AND COMPLETED FOR SPARSE MATRICES
     def get_arcs_dict(self):
         '''
         Converts the arcs DataFrames to dicts and outputs them.
         :return: arcs in dict form
         '''
         arcs_in = {}
-        for place in self.__arc_in_m.index:
-            for transition in self.__arc_in_m.columns:
-                if self.__arc_in_m.loc[place][transition] > 0:
-                    if place in arcs_in:
-                        arcs_in[place].append(transition)
-                    else:
-                        arcs_in[place] = [transition]
+        for iterator in range(len(self.get_arc_in_m().coords[0])):
+            if self.get_arc_in_m().coords[0][iterator] in arcs_in:
+                arcs_in[self.get_arc_in_m().coords[0][iterator]].append(self.get_arc_in_m().coords[1][iterator])
+            else:
+                arcs_in[self.get_arc_in_m().coords[0][iterator]] = [self.get_arc_in_m().coords[1][iterator]]
 
         arcs_out = {}
-        for place in self.__arc_out_m.columns:
-            for transition in self.__arc_out_m.index:
-                if self.__arc_out_m.loc[transition][place] > 0:
-                    if transition in arcs_out:
-                        arcs_out[transition].append(place)
-                    else:
-                        arcs_out[transition] = [place]
+        for iterator in range(len(self.get_arc_out_m().coords[0])):
+            if self.get_arc_out_m().coords[0][iterator] in arcs_out:
+                arcs_out[self.get_arc_out_m().coords[0][iterator]].append(self.get_arc_out_m().coords[1][iterator])
+            else:
+                arcs_out[self.get_arc_out_m().coords[0][iterator]] = [self.get_arc_out_m().coords[1][iterator]]
 
         return arcs_in, arcs_out
 
     # TODO: FIX THIS METHOD TO TAKE INTO ACCOUNT SPARSE MATRICES
+    # TODO: ALREADY TESTED AND COMPLETED FOR SPARSE MATRICES
     def get_connected_arcs(self, name, type):
         '''
         Returns input and output arcs connected to a given element (place/transition) of the Petri Net
@@ -296,42 +357,51 @@ class GSPN(object):
             raise NameError
 
         if type == 'place':
+
+            arcs_in_aux, arcs_out_aux = self.get_arcs_dict()
+            place_index = self.places_to_index[name]
+
             arcs_in = {}
-            for transition in self.__arc_in_m.columns:
-                if self.__arc_in_m.loc[name][transition] > 0:
-                    if name in arcs_in:
-                        arcs_in[name].append(transition)
+            for place in arcs_in_aux:
+                if place == place_index:
+                    if place in arcs_in:
+                        arcs_in[place].append(arcs_in_aux[place])
                     else:
-                        arcs_in[name] = [transition]
+                        arcs_in[place] = [arcs_in_aux[place]]
 
             arcs_out = {}
-            for transition in self.__arc_out_m.index:
-                if self.__arc_out_m.loc[transition][name] > 0:
-                    if transition in arcs_out:
-                        arcs_out[transition].append(name)
-                    else:
-                        arcs_out[transition] = [name]
+            for transition in arcs_out_aux:
+                for place in arcs_out_aux[transition]:
+                    if place == place_index:
+                        if transition in arcs_out:
+                            arcs_out[transition].append(place)
+                        else:
+                            arcs_out[transition] = [place]
 
         if type == 'transition':
-            arcs_in = {}
-            for place in self.__arc_in_m.index:
-                if self.__arc_in_m.loc[place][name] > 0:
-                    if place in arcs_in:
-                        arcs_in[place].append(name)
-                    else:
-                        arcs_in[place] = [name]
+            arcs_in_aux, arcs_out_aux = self.get_arcs_dict()
+            transition_index = self.transitions_to_index[name]
 
+            arcs_in = {}
+            for place in arcs_in_aux:
+                for transition in arcs_in_aux[place]:
+                    if transition == transition_index:
+                        if place in arcs_in:
+                            arcs_in[place].append(transition)
+                        else:
+                            arcs_in[place] = [transition]
             arcs_out = {}
-            for place in self.__arc_out_m.columns:
-                if self.__arc_out_m.loc[name][place] > 0:
-                    if name in arcs_out:
-                        arcs_out[name].append(place)
+            for transition in arcs_out_aux:
+                if transition == transition_index:
+                    if transition in arcs_out:
+                        arcs_out[transition].append(arcs_out[transition])
                     else:
-                        arcs_out[name] = [place]
+                        arcs_out[transition] = arcs_out_aux[transition]
 
         return arcs_in, arcs_out
 
     # TODO: FIX THIS METHOD TO TAKE INTO ACCOUNT SPARSE MATRICES
+    # TODO: ALREADY TESTED AND COMPLETED FOR SPARSE MATRICES
     def remove_place(self, place):
         '''
         Method that removes PLACE from Petri Net, with corresponding connected input and output arcs
@@ -339,8 +409,34 @@ class GSPN(object):
         :return: (dict)(dict) Dictionaries containing input and output arcs connected to the removed place
         '''
         arcs_in, arcs_out = self.get_connected_arcs(place, 'place')
-        self.__arc_in_m.drop(index=place, inplace=True)
-        self.__arc_out_m.drop(columns=place, inplace=True)
+        place_id = self.places_to_index[place]
+
+        # removing place from arc_in
+        places_list = self.__arc_in_m.coords[0].tolist()
+        transitions_list = self.__arc_in_m.coords[1].tolist()
+        iterator = len(places_list) - 1
+        while iterator >= 0:
+            if places_list[iterator] == place_id:
+                del places_list[iterator]
+                del transitions_list[iterator]
+            iterator = iterator - 1
+        # creating new sparse for arc_in
+        self.__arc_in_m = sparse.COO([places_list, transitions_list], np.ones(len(places_list)),
+                                     self.__arc_in_m.shape)
+
+        # removing place from arc_out
+        transitions_list = self.__arc_out_m.coords[0].tolist()
+        places_list = self.__arc_out_m.coords[1].tolist()
+        iterator = len(places_list) - 1
+        while iterator >= 0:
+            if places_list[iterator] == place_id:
+                del transitions_list[iterator]
+                del places_list[iterator]
+            iterator = iterator - 1
+        # creating new sparse for arc_out
+        self.__arc_out_m = sparse.COO([transitions_list, places_list], np.ones(len(places_list)),
+                                      self.__arc_out_m.shape)
+        # removing place from __places
         self.__places.pop(place)
         if place in self.__sparse_marking:
             self.__sparse_marking.pop(place)
@@ -348,6 +444,7 @@ class GSPN(object):
         return arcs_in, arcs_out
 
     # TODO: FIX THIS METHOD TO TAKE INTO ACCOUNT SPARSE MATRICES
+    # TODO: ALREADY TESTED AND COMPLETED FOR SPARSE MATRICES
     def remove_transition(self, transition):
         '''
         Method that removes TRANSITION from Petri Net, with corresponding input and output arcs
@@ -355,34 +452,76 @@ class GSPN(object):
         :return: (dict)(dict) Dictionaries containing input and output arcs connected to the removed transition
         '''
         arcs_in, arcs_out = self.get_connected_arcs(transition, 'transition')
-        self.__arc_in_m.drop(columns=transition, inplace=True)
-        self.__arc_out_m.drop(index=transition, inplace=True)
+        transition_id = self.transitions_to_index[transition]
+
+        # removing transition from arc_in
+        places_list = self.__arc_in_m.coords[0].tolist()
+        transitions_list = self.__arc_in_m.coords[1].tolist()
+        iterator = len(transitions_list) - 1
+        while iterator >= 0:
+            if transitions_list[iterator] == transition_id:
+                del transitions_list[iterator]
+                del places_list[iterator]
+            iterator = iterator - 1
+        # creating new sparse for arc_in
+        self.__arc_in_m = sparse.COO([places_list, transitions_list], np.ones(len(places_list)),
+                                     self.__arc_in_m.shape)
+
+        # removing transition from arc_out
+        transitions_list = self.__arc_out_m.coords[0].tolist()
+        places_list = self.__arc_out_m.coords[1].tolist()
+        iterator = len(transitions_list) - 1
+        while iterator >= 0:
+            if transitions_list[iterator] == transition_id:
+                del transitions_list[iterator]
+                del places_list[iterator]
+            iterator = iterator - 1
+        # creating new sparse for arc_out
+        self.__arc_out_m = sparse.COO([transitions_list, places_list], np.ones(len(places_list)),
+                                     self.__arc_out_m.shape)
+        # removing transition from __transitions
         self.__transitions.pop(transition)
 
         return arcs_in, arcs_out
 
     # TODO: FIX THIS METHOD TO TAKE INTO ACCOUNT SPARSE MATRICES
+    # TODO: ALREADY TESTED AND COMPLETED FOR SPARSE MATRICES
     def remove_arc(self, arcs_in=None, arcs_out=None):
         '''
         Method that removes ARCS from Petri Net.
         :param arcs_in: (dict) Dictionary containing all input arcs to be deleted: e.g.  arcs_in[p1]=['t1','t2'], arcs_in[p2]=['t1','t3']
         :param arcs_out: (dict) Dictionary containing output arcs to be deleted: e.g. arcs_out[t1]=['p1','p2'], arcs_out[t2]=['p1','p3']
-        :return:
+        :return: Boolean
         '''
 
         if arcs_in == None and arcs_out == None:
             return False
 
         if arcs_in != None:
-            for place in arcs_in.keys():
+            for place in arcs_in:
+                place_id = self.places_to_index[place]  # This is an int
                 for transition in arcs_in[place]:
-                    self.__arc_in_m.loc[place][transition] = 0
+                    transition_id = self.transitions_to_index[transition]  # This is an int
+                    places_list = self.__arc_in_m.coords[0].tolist()
+                    transitions_list = self.__arc_in_m.coords[1].tolist()
+                    value = find_correct_value(places_list, transitions_list, place_id, transition_id)
+                    del places_list[value]
+                    del transitions_list[value]
+                    self.__arc_in_m = sparse.COO([places_list, transitions_list], np.ones(len(places_list)),
+                                                 self.__arc_in_m.shape)
 
         if arcs_out != None:
-            for transition in arcs_out.keys():
+            for transition in arcs_out:
+                transition_id = self.transitions_to_index[transition]  # This is an int
                 for place in arcs_out[transition]:
-                    self.__arc_out_m.loc[transition][place] = 0
-
+                    place_id = self.places_to_index[place]  # This is an int
+                    transitions_list = self.__arc_out_m.coords[0].tolist()
+                    places_list = self.__arc_out_m.coords[1].tolist()
+                    value = find_correct_value(places_list, transitions_list, place_id, transition_id)
+                    del places_list[value]
+                    del transitions_list[value]
+                    self.__arc_out_m = sparse.COO([places_list, transitions_list], np.ones(len(places_list)),
+                                                  self.__arc_out_m.shape)
         return True
 
     def get_enabled_transitions(self):
@@ -404,12 +543,12 @@ class GSPN(object):
             else:
                 input_places[transition] = [place]
 
-        # for all transitions check the ones that are enabled (have at least one token in all input places)
+        # for all transitions check the ones that are enabled (have at least the tokens specified in the arc)
         for tr, list_places in input_places.items():
             enabled_transition = True
             for in_pl in list_places:
                 in_pl_name = self.index_to_places[in_pl]
-                if current_marking[in_pl_name] == 0:
+                if current_marking[in_pl_name] < self.__arc_in_m.data[in_pl]:
                     enabled_transition = False
                     break
 
@@ -429,31 +568,37 @@ class GSPN(object):
         :return: always returns True
         '''
         input_places = []
+        tokens_to_consume = []
         output_places = []
+        tokens_to_create = []
         transition_index = self.transitions_to_index[transition]
 
         # get a list with all the input places of the given transition
+        #TODO Use np.where, faster
         for list_index, transition in enumerate(self.__arc_in_m.coords[1]):
             if transition == transition_index:
                 place = self.__arc_in_m.coords[0][list_index]
                 input_places.append(self.index_to_places[place])
+                tokens_to_consume.append(self.__arc_in_m.data[list_index])
 
         # get a list with all the output places of the given transition
         for list_index, transition in enumerate(self.__arc_out_m.coords[0]):
             if transition == transition_index:
                 place = self.__arc_out_m.coords[1][list_index]
                 output_places.append(self.index_to_places[place])
+                tokens_to_create.append(self.__arc_out_m.data[list_index])
 
         # remove tokens from input places
-        self.remove_tokens(input_places, [1] * len(input_places))
+        self.remove_tokens(input_places, tokens_to_consume)
 
         # add tokens to output places
-        self.add_tokens(output_places, [1] * len(output_places))
+        self.add_tokens(output_places, tokens_to_create)
 
         return True
 
     def simulate(self, nsteps=1, reporting_step=1, simulate_wait=False):
         markings = []
+        fired_transition = 0
         for step in range(nsteps):
             if step % reporting_step == 0:
                 markings.append(self.get_current_marking())
@@ -473,10 +618,12 @@ class GSPN(object):
                     # Draw from all enabled immediate transitions
                     firing_transition = np.random.choice(a=random_switch_id, size=None, p=random_switch_prob)
                     # Fire transition
+                    fired_transition = firing_transition
                     self.fire_transition(firing_transition)
                 else:
                     # Fire the only available immediate transition
-                    self.fire_transition(list(random_switch.keys())[0])
+                    fired_transition = list(random_switch.keys())[0]
+                    self.fire_transition(fired_transition)
             elif enabled_exp_transitions:
                 if len(enabled_exp_transitions) > 1:
                     if simulate_wait:
@@ -503,6 +650,7 @@ class GSPN(object):
                         firing_transition = np.random.choice(a=exp_trans_id, size=None, p=exp_trans_prob)
 
                     # Fire transition
+                    fired_transition = firing_transition
                     self.fire_transition(firing_transition)
                 else:
                     if simulate_wait:
@@ -510,9 +658,12 @@ class GSPN(object):
                         time.sleep(wait)
 
                     # Fire transition
-                    self.fire_transition(list(enabled_exp_transitions.keys())[0])
+                    fired_transition = list(enabled_exp_transitions.keys())[0]
+                    self.fire_transition(fired_transition)
 
-        return list(markings)
+        full_list = list(markings)
+        full_list.append(fired_transition)
+        return full_list
 
     def get_state_from_marking(self, marking, states_to_marking):
         for st, mk in states_to_marking.items():
@@ -823,17 +974,15 @@ class GSPN(object):
 if __name__ == "__main__":
     # create a generalized stochastic petri net structure
     my_pn = GSPN()
+
     places = my_pn.add_places(['p1', 'p2', 'p3', 'p4', 'p5'], [1, 0, 1, 0, 1])
-
     trans = my_pn.add_transitions(['t1', 't2', 't3', 't4'], ['exp', 'exp', 'exp', 'exp'], [1, 1, 0.5, 0.5])
-
     arc_in = {}
     arc_in['p1'] = ['t1']
     arc_in['p2'] = ['t2']
     arc_in['p3'] = ['t3']
     arc_in['p4'] = ['t4']
     arc_in['p5'] = ['t1', 't3']
-
     arc_out = {}
     arc_out['t1'] = ['p2']
     arc_out['t2'] = ['p5', 'p1']
@@ -841,16 +990,14 @@ if __name__ == "__main__":
     arc_out['t4'] = ['p3', 'p5']
     a, b = my_pn.add_arcs(arc_in, arc_out)
     '''
-    print(my_pn.get_enabled_transitions())
-    a = my_pn.get_enabled_transitions()
-
-    print('Places: ', my_pn.get_current_marking(), '\n')
-    print('Trans: ', my_pn.get_transitions(), '\n')
-    arcs_in, arcs_out = my_pn.get_arcs()
-    print('Arcs IN: ', arcs_in, '\n')
-    print('Arcs OUT: ', arcs_out, '\n')
-
-    print(my_pn.add_tokens(['p1', 'p3', 'p5'], [10, 5, 1]))
-
-    print('Places: ', my_pn.get_current_marking(), '\n')
-    '''
+    places = my_pn.add_places(['p1', 'p2'], [1,1])
+    trans = my_pn.add_transitions(['t1'], ['exp'], [1])
+    arc_in = {}
+    arc_in['p1'] = ['t1']
+    arc_out = {}
+    arc_out['t1'] = ['p2']
+    a, b = my_pn.add_arcs(arc_in, arc_out)
+'''
+    print("get Arc in, ", my_pn.get_arc_in_m().coords)
+    print("get Arc out", my_pn.get_arc_out_m().coords)
+    print("current marking", my_pn.get_current_marking())
